@@ -17,7 +17,7 @@ from typing import List, Optional, Tuple, Union
 
 import torch
 
-from ...utils import randn_tensor
+from ...utils import randn_tensor, randint_tensor
 from ..pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 
 
@@ -79,12 +79,19 @@ class DDPMPipeline(DiffusionPipeline):
         else:
             image = randn_tensor(image_shape, generator=generator, device=self.device)
 
+        if self.unet.class_embedding is not None:
+            # assuming self.unet.class_embedding is nn.Embedding layer
+            target = randint_tensor(0, self.unet.class_embedding.num_embeddings, (len(image),), generator=generator, 
+                                    device=self.device)
+        else:
+            target = None
+        
         # set step values
         self.scheduler.set_timesteps(num_inference_steps)
 
         for t in self.progress_bar(self.scheduler.timesteps):
             # 1. predict noise model_output
-            model_output = self.unet(image, t).sample
+            model_output = self.unet(image, t, class_labels=target).sample
 
             # 2. compute previous image: x_t -> x_t-1
             image = self.scheduler.step(model_output, t, image, generator=generator).prev_sample
