@@ -41,6 +41,7 @@ class DDPMPipeline(DiffusionPipeline):
     def __call__(
         self,
         batch_size: int = 1,
+        free_guidance_scale: Optional[float] = None,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         num_inference_steps: int = 1000,
         output_type: Optional[str] = "pil",
@@ -50,6 +51,8 @@ class DDPMPipeline(DiffusionPipeline):
         Args:
             batch_size (`int`, *optional*, defaults to 1):
                 The number of images to generate.
+            free_guidance_scale (`float`, *optional*):
+                The scale of the classifier-free guidance score. If `None`, the guidance score is not used.
             generator (`torch.Generator`, *optional*):
                 One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
                 to make generation deterministic.
@@ -91,7 +94,18 @@ class DDPMPipeline(DiffusionPipeline):
 
         for t in self.progress_bar(self.scheduler.timesteps):
             # 1. predict noise model_output
-            model_output = self.unet(image, t, class_labels=target).sample
+            if free_guidance_scale is None:
+                model_output = self.unet(image, t, class_labels=target).sample
+            else:
+                # concat images for original and guidance-free (y=-1) forward pass
+                model_output = self.unet(torch.cat([image, image]), t, 
+                                         class_labels=None if target is None else torch.cat([target, 0 * target - 1])).sample
+                model_output, model_output_free = model_output.chunk(2, dim=0)
+
+                assert self.scheduler.config.prediction_type == "epsilon", "Free guidance only works with epsilon prediction"
+                # we only modify the score, i.e., pred_epsilon in classifier-free guidance
+                model_output = ((1 + free_guidance_scale) * model_output[:, :self.unet.in_channels] - 
+                                free_guidance_scale * model_output_free[:, :self.unet.in_channels])
 
             # 2. compute previous image: x_t -> x_t-1
             image = self.scheduler.step(model_output, t, image, generator=generator).prev_sample

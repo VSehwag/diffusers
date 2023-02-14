@@ -101,10 +101,12 @@ class UNet2DModel(ModelMixin, ConfigMixin):
         add_attention: bool = True,
         class_embed_type: Optional[str] = None,
         num_class_embeds: Optional[int] = None,
+        null_class_embed: bool = False,
     ):
         super().__init__()
 
         self.sample_size = sample_size
+        self.null_class_embed = null_class_embed
         time_embed_dim = block_out_channels[0] * 4
 
         # input
@@ -123,6 +125,8 @@ class UNet2DModel(ModelMixin, ConfigMixin):
         # class embedding
         if class_embed_type is None and num_class_embeds is not None:
             self.class_embedding = nn.Embedding(num_class_embeds, time_embed_dim)
+            if null_class_embed:
+                self.null_class_embedding = nn.Embedding(1, time_embed_dim)
         elif class_embed_type == "timestep":
             self.class_embedding = TimestepEmbedding(timestep_input_dim, time_embed_dim)
         elif class_embed_type == "identity":
@@ -252,7 +256,15 @@ class UNet2DModel(ModelMixin, ConfigMixin):
             if self.config.class_embed_type == "timestep":
                 class_labels = self.time_proj(class_labels)
 
+            # we assume null guidance is applied by setting class labels to -1
+            # TODO: Check if slicing leads to any slowdown on gpu (would be super slow on tpus)
+            mask = (class_labels == -1)
+            class_labels[mask] = 0
             class_emb = self.class_embedding(class_labels).to(dtype=self.dtype)
+            if self.null_class_embed:
+                class_emb_null = self.null_class_embedding(torch.zeros_like(class_labels)).to(dtype=self.dtype)
+                class_emb = mask.float().view(-1, 1) * class_emb_null + (1 - mask.float().view(-1, 1)) * class_emb
+
             emb = emb + class_emb
 
         # 2. pre-process
