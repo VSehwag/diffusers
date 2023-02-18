@@ -115,7 +115,8 @@ class DDPMPipeline(DiffusionPipeline):
         if output_type == "pil":
             image = self.numpy_to_pil(image)
 
+        target_out = target.detach().cpu().numpy() if target is not None else None
         if not return_dict:
-            return (image,)
+            return (image, target_out)
 
-        return ImagePipelineOutput(images=image)
+        return ImagePipelineOutput(images=image), target_out
